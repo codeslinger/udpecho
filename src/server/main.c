@@ -71,6 +71,14 @@ struct lcore_conf {
     struct mbuf_table       tx_mbufs[RTE_MAX_ETHPORTS];
 } __rte_cache_aligned;
 
+struct psd_hdr {
+    uint32_t src_addr;
+    uint32_t dst_addr;
+    uint8_t  zero;
+    uint8_t  proto;
+    uint16_t len;
+} __attribute__((packed));
+
 static const struct rte_eth_conf port_conf = {
     .rxmode = {
         .mq_mode        = ETH_MQ_RX_RSS,
@@ -113,6 +121,7 @@ static const struct rte_eth_txconf tx_conf = {
     },
     .tx_free_thresh = 0,
     .tx_rs_thresh   = 0,
+    .txq_flags      = 0,
 };
 
 #define CMD_LINE_OPT_NUMA_ON    "numa"
@@ -147,6 +156,50 @@ static uint16_t              n_lcore_params =
 static INLINE uint8_t socket_for_lcore(unsigned lcore_id)
 {
     return (numa_on) ? (uint8_t) rte_lcore_to_socket_id(lcore_id) : 0;
+}
+
+/*
+ * Do incremental addition to one's compliment sum in @start.
+ */
+static inline uint32_t csum_partial(const uint16_t *p, uint16_t size, uint32_t start)
+{
+    uint32_t sum = start;
+
+    while (size > 1) {
+        sum += *p;
+        size -= sizeof(uint16_t);
+        p++;
+    }
+    if (size) {
+        sum += *((const uint8_t *) p);
+    }
+    return sum;
+}
+
+/*
+ * Fold 32-bit @x one's compliment sum into 16-bit value.
+ */
+static inline uint16_t csum_fold(uint32_t x)
+{
+    x = (x & 0x0000FFFF) + (x >> 16);
+    x = (x & 0x0000FFFF) + (x >> 16);
+    return (uint16_t) x;
+}
+
+/*
+ * Compute checksum of IPv4 pseudo-header.
+ */
+static inline uint16_t ipv4_pseudo_csum(struct ipv4_hdr *ip)
+{
+    struct psd_hdr psd;
+
+    psd.src_addr = ip->src_addr;
+    psd.dst_addr = ip->dst_addr;
+    psd.zero = 0;
+    psd.proto = ip->next_proto_id;
+    psd.len = rte_cpu_to_be_16(
+        rte_be_to_cpu_16(ip->total_length) - (int)((ip->version_ihl & 0x0F) * 4u));
+    return csum_fold(csum_partial((uint16_t *) &psd, sizeof(psd), 0));
 }
 
 /*
@@ -264,6 +317,10 @@ static INLINE int echo_single_udp_packet(struct rte_mbuf *pkt)
     udp_port = udp_h->src_port;
     udp_h->src_port = udp_h->dst_port;
     udp_h->dst_port = udp_port;
+    /* set checksum parameters for HW offload */
+    pkt->ol_flags |= (PKT_TX_IP_CKSUM | PKT_TX_UDP_CKSUM);
+    ip_h->hdr_checksum = 0;
+    udp_h->dgram_cksum = ipv4_pseudo_csum(ip_h);
     return 1;
 }
 

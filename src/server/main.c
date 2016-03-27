@@ -508,26 +508,33 @@ static void init_lcores(void)
  */
 static void configure_ports(unsigned n_ports, uint32_t port_mask, uint32_t n_lcores)
 {
-    int         rv;
-    uint8_t     portid,
-                n_rx_queue;
-    uint32_t    n_tx_queue;
+    int                 rv;
+    uint8_t             portid,
+                        n_rx_queue;
+    uint32_t            n_tx_queue;
+    struct ether_addr   eth_addr;
 
     for (portid = 0; portid < n_ports; portid++) {
         if (!(port_mask & (1 << portid))) {
             RTE_LOG(INFO, USER1, "skipping disabled port %u\n", portid);
             continue;
         }
-        RTE_LOG(INFO, USER1, "initializing port %u\n", portid);
         n_rx_queue = rx_queues_for_port(portid);
         n_tx_queue = n_lcores;
         if (n_tx_queue > MAX_TX_QUEUE_PER_PORT) {
             n_tx_queue = MAX_TX_QUEUE_PER_PORT;
         }
-        RTE_LOG(INFO, USER1, "creating queues: %u rx, %u tx\n", (uint16_t) n_rx_queue, n_tx_queue);
+        RTE_LOG(INFO, USER1, "initializing port %u: %u rx, %u tx\n", portid, (uint16_t) n_rx_queue, n_tx_queue);
         if ((rv = rte_eth_dev_configure(portid, n_rx_queue, (uint16_t) n_tx_queue, &port_conf)) < 0) {
             DIE("failed to configure Ethernet port %"PRIu8"\n", portid);
         }
+        rte_eth_macaddr_get(portid, &eth_addr);
+        RTE_LOG(INFO, USER1,
+                "port %u MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                portid,
+                eth_addr.addr_bytes[0], eth_addr.addr_bytes[1],
+                eth_addr.addr_bytes[2], eth_addr.addr_bytes[3],
+                eth_addr.addr_bytes[4], eth_addr.addr_bytes[5]);
         init_packet_buffers(NUM_MBUF(n_ports, n_rx_queue, n_tx_queue, n_lcores));
         init_tx_queue_for_port(portid);
     }
